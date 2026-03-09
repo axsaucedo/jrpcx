@@ -1,0 +1,202 @@
+================================================================================
+JRPC2 LIBRARY ANALYSIS - EXECUTIVE SUMMARY
+================================================================================
+
+REPORT LOCATION: JRPC2_RESEARCH_REPORT.md (1,080 lines)
+
+OVERVIEW
+--------
+The creachadair/jrpc2 library is a fully-featured, production-ready implementation
+of the JSON-RPC 2.0 protocol for Go. It provides clean abstractions, type-safe
+handler adaptation, concurrent request processing, and context integration.
+
+KEY FINDINGS
+============
+
+1. TRANSPORT ABSTRACTION (Critical Strength)
+   - Channel interface: Send(), Recv(), Close()
+   - Multiple framings: Line, RawJSON, Header (HTTP-style), Direct
+   - Enables swapping transports without code changes
+   - Perfect for testing with in-memory channels
+
+2. CLIENT API (Well-Designed)
+   - Thread-safe for concurrent requests
+   - Single calls: Call(ctx, method, params)
+   - Batch requests: Batch(ctx, []Spec)
+   - Notifications: Notify(ctx, method, params)
+   - Automatic ID management and response tracking
+   - Per-request context timeout support
+
+3. SERVER IMPLEMENTATION (Mature)
+   - Request batching with proper concurrency control
+   - Configurable handler concurrency (default: NumCPU)
+   - Notification barrier ensures ordering across batches
+   - Built-in server push (non-standard, LSP-compatible)
+   - Server info with method introspection
+
+4. HANDLER PATTERN (Excellent DX)
+   - handler.New() adapts functions automatically
+   - Supports multiple function signatures
+   - Automatic JSON parameter handling
+   - Struct field mapping to array parameters
+   - Reflection pre-compilation (minimal runtime overhead)
+   - Support for positional and named parameters
+
+5. ERROR HANDLING (Compliant)
+   - Standard JSON-RPC error codes (-32700 to -32603)
+   - Custom error codes support (app-defined)
+   - ErrCoder interface for custom errors
+   - Error data attachment
+   - Context error conversion (Cancelled, DeadlineExceeded)
+
+6. CONCURRENCY MODEL (Sophisticated)
+   Client:
+   - Lock-free pending response tracking
+   - Buffered channels prevent rendezvous
+   - Multiple concurrent waiters on single response
+   - Context cancellation with hooks
+   
+   Server:
+   - Semaphore-based concurrency control
+   - Requests in batch executed concurrently
+   - Non-batch requests maintain order
+   - Last-request inline optimization
+   - Notification barrier for proper ordering
+
+7. CONTEXT INTEGRATION (First-Class)
+   - Per-request timeouts via context
+   - Automatic cancellation handling
+   - OnCancel hooks for custom handling
+   - Server/request values in handler context
+   - Custom base context factory support
+
+ARCHITECTURE PATTERNS
+=====================
+
+Request Flow (Server):
+  read(channel) -> queue -> dispatch -> invoke -> deliver -> send(channel)
+  
+Response Flow (Client):
+  Call() -> req() -> send() -> launch waitComplete() -> wait() -> response
+
+Batching:
+  - Client groups Specs into single batch request
+  - Server validates, assigns handlers, executes
+  - Responses omit notifications (JSON-RPC spec)
+  - Order preserved for non-notification responses
+
+Concurrency:
+  - Client: multiple goroutines can Call() safely
+  - Server: requests concurrent up to semaphore limit
+  - Per-request context cancellation tracked
+  - Cleanup on Close() or error
+
+CODE ORGANIZATION
+=================
+- client.go (449 lines)   - Thread-safe client
+- server.go (838 lines)   - Concurrent request dispatch
+- base.go (247 lines)     - Request/Response/Assigner types
+- handler/handler.go      - Function adaptation via reflection
+- channel/channel.go      - Interface and implementations
+- error.go, code.go       - Error handling
+
+Total: ~6,500 lines of Go code (including tests)
+
+STRENGTHS
+=========
+✓ Clean transport abstraction (channels)
+✓ Full JSON-RPC 2.0 compliance
+✓ Concurrent client and server
+✓ Flexible handler definition (reflection-based)
+✓ Context integration with timeouts
+✓ Server push (bidirectional)
+✓ Batch request support with ordering
+✓ Minimal external dependencies (2 only)
+✓ Stable API (semantic versioning)
+✓ Production-quality (extensive tests, panic recovery)
+
+LIMITATIONS
+===========
+✗ No streaming support (message-based only)
+✗ No built-in middleware/interceptors
+✗ Limited HTTP support (thin jhttp package)
+✗ No built-in TLS helpers
+✗ No service discovery
+✗ Basic logger (Printf style, not structured)
+✗ Reflection overhead on handler registration
+✗ No connection pooling
+
+BEST USE CASES
+==============
+1. JSON-RPC microservices
+2. Language Server Protocol (LSP) implementations
+3. Lightweight RPC frameworks
+4. Testing distributed systems
+5. Custom transports with pluggable channels
+
+AVOID FOR
+=========
+1. Streaming or file transfer workloads
+2. Systems requiring HTTP-specific features
+3. High-throughput, low-latency scenarios
+4. Applications needing built-in auth/TLS
+5. Dynamic handler registration in hot paths
+
+NOTABLE IMPLEMENTATION DETAILS
+==============================
+1. Response wait uses first-reader pattern (no data race)
+2. Notification barrier uses WaitGroup across batches
+3. Context values plumbed via context.WithValue()
+4. Handler wrappers pre-compile at registration time
+5. Semaphore gates concurrent handler execution
+6. Inline execution of last request in batch
+7. Buffered Response channel (size 1) prevents deadlock
+8. Error codes -32097/-32096 map context errors
+9. Message IDs start at 1 (avoids null equivalence)
+10. Channel.Direct() perfect for testing (no framing)
+
+PERFORMANCE CHARACTERISTICS
+==========================
+- Minimal reflection (pre-compiled at setup)
+- No goroutine per request unless concurrent
+- Buffered channels minimize context switches
+- Inline last request (avoids goroutine overhead)
+- Full message marshaling (no streaming)
+- Blocking Send() (no buffering in transport layer)
+
+COMPARISON
+==========
+vs gorilla/rpc: More modern, JSON-RPC 2.0 compliant, better testing
+vs ethereum/go-ethereum: Transport-agnostic, cleaner API, more complete
+vs gRPC: Simpler, JSON-based, more flexible, less performance-oriented
+
+TESTING SUPPORT
+===============
+- server.Local() creates in-memory client/server pair
+- channel.Direct() for testing without framing
+- Extensive test coverage (1,330 lines of tests)
+- Benchmark suite included
+
+DOCUMENTATION QUALITY
+=====================
+✓ Excellent inline comments
+✓ Comprehensive package docs (doc.go)
+✓ Example in playground
+✓ Tool examples (adder, server, client, http)
+✗ No deployment guide
+✗ Limited pattern documentation
+
+VERDICT
+=======
+EXCELLENT library for JSON-RPC 2.0 implementation in Go. Strong fundamentals,
+well-architected patterns, production-ready. Ideal for LSP servers, microservices,
+and custom transports. Main limitation is lack of streaming and built-in features
+(TLS, auth, monitoring).
+
+Rating: 9/10 for JSON-RPC use cases
+         7/10 for general RPC frameworks
+         
+The channel abstraction is particularly well-designed and serves as a model
+for transport-agnostic protocol implementations.
+
+================================================================================
