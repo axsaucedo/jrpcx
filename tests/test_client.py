@@ -1,14 +1,35 @@
-"""Tests for BaseJSONRPCClient."""
+"""Tests for BaseJSONRPCClient, JSONRPCClient, and AsyncJSONRPCClient."""
 
 import json
 
 import pytest
 
-from jrpcx._client import BaseJSONRPCClient
+from jrpcx._client import (
+    AsyncJSONRPCClient,
+    BaseJSONRPCClient,
+    JSONRPCClient,
+)
 from jrpcx._config import Timeout
-from jrpcx._exceptions import InvalidResponseError, ProtocolError
+from jrpcx._exceptions import (
+    InvalidResponseError,
+    MethodNotFoundError,
+    ProtocolError,
+)
 from jrpcx._id_generators import sequential
+from jrpcx._models import ErrorData, Request, Response
+from jrpcx._transports._mock import AsyncMockTransport, MockTransport
 from jrpcx._types import USE_CLIENT_DEFAULT
+
+
+def echo_handler(request: Request) -> Response:
+    return Response(id=request.id, result=request.params)
+
+
+def error_handler(request: Request) -> Response:
+    return Response(
+        id=request.id,
+        error=ErrorData(code=-32601, message="Method not found"),
+    )
 
 
 class TestBaseClient:
@@ -109,3 +130,187 @@ class TestBaseClient:
         client = BaseJSONRPCClient("http://localhost", timeout=5.0)
         resolved = client._resolve_timeout(None)
         assert resolved is None
+
+
+class TestJSONRPCClient:
+    def test_call_basic(self) -> None:
+        transport = MockTransport(echo_handler)
+        client = JSONRPCClient("http://localhost", transport=transport)
+        result = client.call("echo", [1, 2])
+        assert result == [1, 2]
+
+    def test_call_raises_on_error(self) -> None:
+        transport = MockTransport(error_handler)
+        client = JSONRPCClient("http://localhost", transport=transport)
+        with pytest.raises(MethodNotFoundError):
+            client.call("bad_method")
+
+    def test_proxy_basic(self) -> None:
+        transport = MockTransport(echo_handler)
+        client = JSONRPCClient("http://localhost", transport=transport)
+        result = client.echo(1, 2)
+        assert result == [1, 2]
+
+    def test_proxy_kwargs(self) -> None:
+        transport = MockTransport(echo_handler)
+        client = JSONRPCClient("http://localhost", transport=transport)
+        result = client.greet(name="Alice")
+        assert result == {"name": "Alice"}
+
+    def test_proxy_no_params(self) -> None:
+        transport = MockTransport(echo_handler)
+        client = JSONRPCClient("http://localhost", transport=transport)
+        result = client.eth_blockNumber()
+        assert result is None
+
+    def test_proxy_nested(self) -> None:
+        """Nested proxy builds dotted method name."""
+        methods_called: list[str] = []
+
+        def capture_handler(request: Request) -> Response:
+            methods_called.append(request.method)
+            return Response(id=request.id, result="ok")
+
+        transport = MockTransport(capture_handler)
+        client = JSONRPCClient("http://localhost", transport=transport)
+        client.system.listMethods()
+        assert methods_called == ["system.listMethods"]
+
+    def test_proxy_reserved_name_raises(self) -> None:
+        transport = MockTransport(echo_handler)
+        client = JSONRPCClient("http://localhost", transport=transport)
+        with pytest.raises(AttributeError, match="call"):
+            _ = client.__getattr__("call")
+
+    def test_proxy_private_name_raises(self) -> None:
+        transport = MockTransport(echo_handler)
+        client = JSONRPCClient("http://localhost", transport=transport)
+        with pytest.raises(AttributeError):
+            _ = client.__getattr__("_private")
+
+    def test_call_fallback_for_reserved(self) -> None:
+        methods_called: list[str] = []
+
+        def capture(request: Request) -> Response:
+            methods_called.append(request.method)
+            return Response(id=request.id, result="ok")
+
+        transport = MockTransport(capture)
+        client = JSONRPCClient("http://localhost", transport=transport)
+        client.call("close")
+        assert methods_called == ["close"]
+
+    def test_context_manager(self) -> None:
+        transport = MockTransport(echo_handler)
+        with JSONRPCClient("http://localhost", transport=transport) as c:
+            result = c.echo(42)
+            assert result == [42]
+        assert c.is_closed
+
+    def test_explicit_close(self) -> None:
+        transport = MockTransport(echo_handler)
+        client = JSONRPCClient("http://localhost", transport=transport)
+        client.echo("test")
+        client.close()
+        assert client.is_closed
+
+    def test_call_after_close_raises(self) -> None:
+        transport = MockTransport(echo_handler)
+        client = JSONRPCClient("http://localhost", transport=transport)
+        client.close()
+        with pytest.raises(RuntimeError, match="closed"):
+            client.call("test")
+
+    def test_no_transport_raises(self) -> None:
+        client = JSONRPCClient("http://localhost")
+        with pytest.raises(RuntimeError, match="No transport"):
+            client.call("test")
+
+    def test_mixed_args_kwargs_raises(self) -> None:
+        transport = MockTransport(echo_handler)
+        client = JSONRPCClient("http://localhost", transport=transport)
+        with pytest.raises(TypeError, match="Cannot mix"):
+            client.echo(1, name="Alice")
+
+
+class TestAsyncJSONRPCClient:
+    @pytest.mark.asyncio
+    async def test_call_basic(self) -> None:
+        transport = AsyncMockTransport(echo_handler)
+        client = AsyncJSONRPCClient(
+            "http://localhost", transport=transport
+        )
+        result = await client.call("echo", [1, 2])
+        assert result == [1, 2]
+
+    @pytest.mark.asyncio
+    async def test_call_raises_on_error(self) -> None:
+        transport = AsyncMockTransport(error_handler)
+        client = AsyncJSONRPCClient(
+            "http://localhost", transport=transport
+        )
+        with pytest.raises(MethodNotFoundError):
+            await client.call("bad_method")
+
+    @pytest.mark.asyncio
+    async def test_proxy_basic(self) -> None:
+        transport = AsyncMockTransport(echo_handler)
+        client = AsyncJSONRPCClient(
+            "http://localhost", transport=transport
+        )
+        result = await client.echo(1, 2)
+        assert result == [1, 2]
+
+    @pytest.mark.asyncio
+    async def test_proxy_kwargs(self) -> None:
+        transport = AsyncMockTransport(echo_handler)
+        client = AsyncJSONRPCClient(
+            "http://localhost", transport=transport
+        )
+        result = await client.greet(name="Bob")
+        assert result == {"name": "Bob"}
+
+    @pytest.mark.asyncio
+    async def test_proxy_nested(self) -> None:
+        methods: list[str] = []
+
+        def capture(request: Request) -> Response:
+            methods.append(request.method)
+            return Response(id=request.id, result="ok")
+
+        transport = AsyncMockTransport(capture)
+        client = AsyncJSONRPCClient(
+            "http://localhost", transport=transport
+        )
+        await client.system.listMethods()
+        assert methods == ["system.listMethods"]
+
+    @pytest.mark.asyncio
+    async def test_async_context_manager(self) -> None:
+        transport = AsyncMockTransport(echo_handler)
+        async with AsyncJSONRPCClient(
+            "http://localhost", transport=transport
+        ) as c:
+            result = await c.echo(42)
+            assert result == [42]
+        assert c.is_closed
+
+    @pytest.mark.asyncio
+    async def test_aclose(self) -> None:
+        transport = AsyncMockTransport(echo_handler)
+        client = AsyncJSONRPCClient(
+            "http://localhost", transport=transport
+        )
+        await client.echo("test")
+        await client.aclose()
+        assert client.is_closed
+
+    @pytest.mark.asyncio
+    async def test_call_after_close_raises(self) -> None:
+        transport = AsyncMockTransport(echo_handler)
+        client = AsyncJSONRPCClient(
+            "http://localhost", transport=transport
+        )
+        await client.aclose()
+        with pytest.raises(RuntimeError, match="closed"):
+            await client.call("test")
