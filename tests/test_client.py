@@ -221,10 +221,10 @@ class TestJSONRPCClient:
         with pytest.raises(RuntimeError, match="closed"):
             client.call("test")
 
-    def test_no_transport_raises(self) -> None:
-        client = JSONRPCClient("http://localhost")
-        with pytest.raises(RuntimeError, match="No transport"):
-            client.call("test")
+    def test_auto_creates_http_transport(self) -> None:
+        client = JSONRPCClient("http://localhost:9999")
+        assert client._sync_transport is not None
+        client.close()
 
     def test_mixed_args_kwargs_raises(self) -> None:
         transport = MockTransport(echo_handler)
@@ -314,3 +314,59 @@ class TestAsyncJSONRPCClient:
         await client.aclose()
         with pytest.raises(RuntimeError, match="closed"):
             await client.call("test")
+
+
+class TestClientConfiguration:
+    """Tests for headers, auth, timeout pass-through."""
+
+    def test_headers_passed_to_auto_transport(
+        self, rpc_url: str
+    ) -> None:
+        client = JSONRPCClient(
+            rpc_url, headers={"X-Custom": "test"}
+        )
+        result = client.call("echo", ["hi"])
+        assert result == ["hi"]
+        client.close()
+
+    def test_timeout_float_passed_to_transport(self) -> None:
+        client = JSONRPCClient(
+            "http://localhost:9999", timeout=3.0
+        )
+        assert isinstance(client._timeout, Timeout)
+        assert client._timeout.read == 3.0
+        client.close()
+
+    def test_auth_tuple_accepted(self) -> None:
+        client = JSONRPCClient(
+            "http://localhost:9999",
+            auth=("user", "pass"),
+        )
+        assert client._auth == ("user", "pass")
+        client.close()
+
+    @pytest.mark.asyncio
+    async def test_async_headers_config(
+        self, rpc_url: str
+    ) -> None:
+        client = AsyncJSONRPCClient(
+            rpc_url, headers={"X-Custom": "async-test"}
+        )
+        result = await client.call("echo", ["async"])
+        assert result == ["async"]
+        await client.aclose()
+
+    @pytest.mark.asyncio
+    async def test_async_auto_transport(
+        self, rpc_url: str
+    ) -> None:
+        async with AsyncJSONRPCClient(rpc_url) as c:
+            result = await c.add(10, 20)
+            assert result == 30
+
+    def test_sync_auto_transport(
+        self, rpc_url: str
+    ) -> None:
+        with JSONRPCClient(rpc_url) as c:
+            result = c.add(10, 20)
+            assert result == 30

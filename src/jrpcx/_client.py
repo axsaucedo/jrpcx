@@ -6,11 +6,14 @@ import json
 from collections.abc import Iterator
 from typing import Any
 
+import httpx
+
 from jrpcx._config import Timeout, TimeoutTypes
 from jrpcx._exceptions import InvalidResponseError, ProtocolError
 from jrpcx._id_generators import sequential
 from jrpcx._models import Response
 from jrpcx._transports import AsyncBaseTransport, BaseTransport
+from jrpcx._transports._http import AsyncHTTPTransport, HTTPTransport
 from jrpcx._types import (
     USE_CLIENT_DEFAULT,
     JSONParams,
@@ -32,6 +35,8 @@ class BaseJSONRPCClient:
         *,
         transport: BaseTransport | AsyncBaseTransport | None = None,
         timeout: TimeoutTypes = None,
+        headers: dict[str, str] | None = None,
+        auth: httpx.Auth | tuple[str, str] | None = None,
         id_generator: Iterator[RequestID] | None = None,
     ) -> None:
         self._url = url
@@ -41,6 +46,8 @@ class BaseJSONRPCClient:
             if isinstance(timeout, (int, float))
             else timeout
         )
+        self._headers = headers
+        self._auth = auth
         self._id_generator = id_generator or sequential()
         self._closed = False
 
@@ -179,25 +186,34 @@ class JSONRPCClient(BaseJSONRPCClient):
         *,
         transport: BaseTransport | None = None,
         timeout: TimeoutTypes = None,
+        headers: dict[str, str] | None = None,
+        auth: httpx.Auth | tuple[str, str] | None = None,
         id_generator: Iterator[RequestID] | None = None,
     ) -> None:
         super().__init__(
             url,
             transport=transport,
             timeout=timeout,
+            headers=headers,
+            auth=auth,
             id_generator=id_generator,
         )
         if transport is not None:
             self._sync_transport: BaseTransport = transport
         else:
-            self._sync_transport = None  # type: ignore[assignment]
+            httpx_timeout = (
+                self._timeout.read
+                if isinstance(self._timeout, Timeout)
+                else self._timeout
+            )
+            self._sync_transport = HTTPTransport(
+                url,
+                headers=headers,
+                auth=auth,
+                timeout=httpx_timeout,
+            )
 
     def _get_transport(self) -> BaseTransport:
-        if self._sync_transport is None:
-            raise RuntimeError(
-                "No transport configured. Pass transport= or "
-                "install httpx and use HTTPTransport."
-            )
         return self._sync_transport
 
     def call(
@@ -250,25 +266,34 @@ class AsyncJSONRPCClient(BaseJSONRPCClient):
         *,
         transport: AsyncBaseTransport | None = None,
         timeout: TimeoutTypes = None,
+        headers: dict[str, str] | None = None,
+        auth: httpx.Auth | tuple[str, str] | None = None,
         id_generator: Iterator[RequestID] | None = None,
     ) -> None:
         super().__init__(
             url,
             transport=transport,
             timeout=timeout,
+            headers=headers,
+            auth=auth,
             id_generator=id_generator,
         )
         if transport is not None:
             self._async_transport: AsyncBaseTransport = transport
         else:
-            self._async_transport = None  # type: ignore[assignment]
+            httpx_timeout = (
+                self._timeout.read
+                if isinstance(self._timeout, Timeout)
+                else self._timeout
+            )
+            self._async_transport = AsyncHTTPTransport(
+                url,
+                headers=headers,
+                auth=auth,
+                timeout=httpx_timeout,
+            )
 
     def _get_transport(self) -> AsyncBaseTransport:
-        if self._async_transport is None:
-            raise RuntimeError(
-                "No transport configured. Pass transport= or "
-                "install httpx and use AsyncHTTPTransport."
-            )
         return self._async_transport
 
     async def call(
