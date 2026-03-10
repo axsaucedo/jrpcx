@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import json
-from collections.abc import Iterator
+from collections.abc import Callable, Iterator
 from typing import Any
 
 import httpx
@@ -38,6 +38,10 @@ class BaseJSONRPCClient:
         headers: dict[str, str] | None = None,
         auth: httpx.Auth | tuple[str, str] | None = None,
         id_generator: Iterator[RequestID] | None = None,
+        event_hooks: dict[
+            str, list[Callable[..., Any]]
+        ]
+        | None = None,
     ) -> None:
         self._url = url
         self._transport = transport
@@ -50,6 +54,25 @@ class BaseJSONRPCClient:
         self._auth = auth
         self._id_generator = id_generator or sequential()
         self._closed = False
+        self._event_hooks: dict[str, list[Callable[..., Any]]] = {
+            "request": [],
+            "response": [],
+            "error": [],
+        }
+        if event_hooks:
+            for key, hooks in event_hooks.items():
+                if key not in self._event_hooks:
+                    raise ValueError(
+                        f"Unknown event hook: {key!r}. "
+                        f"Valid: {list(self._event_hooks)}"
+                    )
+                self._event_hooks[key] = list(hooks)
+
+    def _fire_hooks(
+        self, event: str, *args: Any
+    ) -> None:
+        for hook in self._event_hooks.get(event, []):
+            hook(*args)
 
     @property
     def is_closed(self) -> bool:
@@ -189,6 +212,10 @@ class JSONRPCClient(BaseJSONRPCClient):
         headers: dict[str, str] | None = None,
         auth: httpx.Auth | tuple[str, str] | None = None,
         id_generator: Iterator[RequestID] | None = None,
+        event_hooks: dict[
+            str, list[Callable[..., Any]]
+        ]
+        | None = None,
     ) -> None:
         super().__init__(
             url,
@@ -197,6 +224,7 @@ class JSONRPCClient(BaseJSONRPCClient):
             headers=headers,
             auth=auth,
             id_generator=id_generator,
+            event_hooks=event_hooks,
         )
         if transport is not None:
             self._sync_transport: BaseTransport = transport
@@ -228,9 +256,17 @@ class JSONRPCClient(BaseJSONRPCClient):
         request_bytes, _ = self._build_request_bytes(
             method, params
         )
+        self._fire_hooks("request", method, params)
         transport = self._get_transport()
-        response_bytes = transport.handle_request(request_bytes)
+        try:
+            response_bytes = transport.handle_request(
+                request_bytes
+            )
+        except Exception as exc:
+            self._fire_hooks("error", exc)
+            raise
         response = self._parse_response(response_bytes)
+        self._fire_hooks("response", response)
         response.raise_for_error()
         return response.result
 
@@ -269,6 +305,10 @@ class AsyncJSONRPCClient(BaseJSONRPCClient):
         headers: dict[str, str] | None = None,
         auth: httpx.Auth | tuple[str, str] | None = None,
         id_generator: Iterator[RequestID] | None = None,
+        event_hooks: dict[
+            str, list[Callable[..., Any]]
+        ]
+        | None = None,
     ) -> None:
         super().__init__(
             url,
@@ -277,6 +317,7 @@ class AsyncJSONRPCClient(BaseJSONRPCClient):
             headers=headers,
             auth=auth,
             id_generator=id_generator,
+            event_hooks=event_hooks,
         )
         if transport is not None:
             self._async_transport: AsyncBaseTransport = transport
@@ -308,11 +349,19 @@ class AsyncJSONRPCClient(BaseJSONRPCClient):
         request_bytes, _ = self._build_request_bytes(
             method, params
         )
+        self._fire_hooks("request", method, params)
         transport = self._get_transport()
-        response_bytes = await transport.handle_async_request(
-            request_bytes
-        )
+        try:
+            response_bytes = (
+                await transport.handle_async_request(
+                    request_bytes
+                )
+            )
+        except Exception as exc:
+            self._fire_hooks("error", exc)
+            raise
         response = self._parse_response(response_bytes)
+        self._fire_hooks("response", response)
         response.raise_for_error()
         return response.result
 
