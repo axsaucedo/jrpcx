@@ -89,6 +89,7 @@ class ParseError(ProtocolError):
         message: str = "Parse error",
         **kwargs: Any,
     ) -> None:
+        kwargs.pop("code", None)
         super().__init__(message, code=ErrorCode.PARSE_ERROR, **kwargs)
 
 
@@ -100,6 +101,7 @@ class InvalidRequestError(ProtocolError):
         message: str = "Invalid request",
         **kwargs: Any,
     ) -> None:
+        kwargs.pop("code", None)
         super().__init__(message, code=ErrorCode.INVALID_REQUEST, **kwargs)
 
 
@@ -122,6 +124,7 @@ class MethodNotFoundError(ServerError):
         message: str = "Method not found",
         **kwargs: Any,
     ) -> None:
+        kwargs.pop("code", None)
         super().__init__(message, code=ErrorCode.METHOD_NOT_FOUND, **kwargs)
 
 
@@ -133,6 +136,7 @@ class InvalidParamsError(ServerError):
         message: str = "Invalid params",
         **kwargs: Any,
     ) -> None:
+        kwargs.pop("code", None)
         super().__init__(message, code=ErrorCode.INVALID_PARAMS, **kwargs)
 
 
@@ -144,6 +148,7 @@ class InternalError(ServerError):
         message: str = "Internal error",
         **kwargs: Any,
     ) -> None:
+        kwargs.pop("code", None)
         super().__init__(message, code=ErrorCode.INTERNAL_ERROR, **kwargs)
 
 
