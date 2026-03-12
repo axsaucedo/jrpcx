@@ -22,6 +22,7 @@ def _dispatch(method: str, params: Any) -> Any:
         "no_params": _handle_no_params,
         "slow": _handle_slow,
         "error": _handle_error,
+        "custom_error": _handle_custom_error,
     }
     handler = handlers.get(method)
     if handler is None:
@@ -65,6 +66,10 @@ def _handle_slow(params: Any) -> Any:
 
 def _handle_error(params: Any) -> Any:
     return {"__error__": {"code": -32601, "message": "Method not found"}}
+
+
+def _handle_custom_error(params: Any) -> Any:
+    return {"__error__": {"code": -1001, "message": "Custom application error"}}
 
 
 # --- HTTP Request Handler ---
