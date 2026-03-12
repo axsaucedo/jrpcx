@@ -1,5 +1,6 @@
 """jrpcx — Modern Python JSON-RPC 2.0 Client."""
 
+from jrpcx._batch import BatchResult
 from jrpcx._client import AsyncJSONRPCClient, JSONRPCClient
 from jrpcx._config import Timeout
 from jrpcx._exceptions import (
@@ -18,6 +19,13 @@ from jrpcx._exceptions import (
     TimeoutError,
     TransportError,
 )
+from jrpcx._logging import log_request, log_response
+from jrpcx._middleware import (
+    AsyncMiddleware,
+    AsyncMiddlewareHandler,
+    Middleware,
+    MiddlewareHandler,
+)
 from jrpcx._models import ErrorData, Request, Response
 from jrpcx._transports import AsyncBaseTransport, BaseTransport
 from jrpcx._transports._http import AsyncHTTPTransport, HTTPTransport
@@ -34,8 +42,11 @@ __all__ = [
     "AsyncClient",
     "AsyncHTTPTransport",
     "AsyncJSONRPCClient",
+    "AsyncMiddleware",
+    "AsyncMiddlewareHandler",
     "AsyncMockTransport",
     "BaseTransport",
+    "BatchResult",
     "Client",
     "ConnectionError",
     "ErrorData",
@@ -48,6 +59,8 @@ __all__ = [
     "JSONRPCClient",
     "JSONRPCError",
     "MethodNotFoundError",
+    "Middleware",
+    "MiddlewareHandler",
     "MockTransport",
     "ParseError",
     "ProtocolError",
@@ -57,4 +70,6 @@ __all__ = [
     "Timeout",
     "TimeoutError",
     "TransportError",
+    "log_request",
+    "log_response",
 ]

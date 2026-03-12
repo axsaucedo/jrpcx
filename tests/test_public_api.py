@@ -43,6 +43,13 @@ class TestPublicAPI:
             "InvalidParamsError",
             "InternalError",
             "ApplicationError",
+            "BatchResult",
+            "Middleware",
+            "MiddlewareHandler",
+            "AsyncMiddleware",
+            "AsyncMiddlewareHandler",
+            "log_request",
+            "log_response",
         }
         actual = set(jrpcx.__all__)
         assert actual == expected
@@ -51,3 +58,18 @@ class TestPublicAPI:
         for name in jrpcx.__all__:
             obj = getattr(jrpcx, name)
             assert obj is not None, f"{name} is None"
+
+    def test_middleware_subpackage(self) -> None:
+        from jrpcx.middleware import (
+            ExponentialBackoff,
+            FibonacciBackoff,
+            FixedBackoff,
+            async_retry,
+            retry,
+        )
+
+        assert callable(retry)
+        assert callable(async_retry)
+        assert ExponentialBackoff is not None
+        assert FixedBackoff is not None
+        assert FibonacciBackoff is not None
