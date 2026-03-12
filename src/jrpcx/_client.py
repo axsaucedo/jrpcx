@@ -26,7 +26,7 @@ class BaseJSONRPCClient:
     """Shared business logic for sync and async JSON-RPC clients."""
 
     _RESERVED_NAMES: frozenset[str] = frozenset(
-        {"call", "close", "aclose", "send", "send_request"}
+        {"call", "close", "aclose", "send", "send_request", "notify", "batch"}
     )
 
     def __init__(
@@ -96,6 +96,20 @@ class BaseJSONRPCClient:
         if params is not None:
             payload["params"] = params
         return json.dumps(payload).encode(), request_id
+
+    def _build_notification_bytes(
+        self,
+        method: str,
+        params: JSONParams = None,
+    ) -> bytes:
+        """Build a JSON-RPC notification (no id, no response expected)."""
+        payload: dict[str, Any] = {
+            "jsonrpc": "2.0",
+            "method": method,
+        }
+        if params is not None:
+            payload["params"] = params
+        return json.dumps(payload).encode()
 
     def _parse_response(self, data: bytes) -> Response:
         """Parse JSON-RPC response bytes into a Response object."""
@@ -197,6 +211,67 @@ def _resolve_params(
     return None
 
 
+# --- Notify proxies ---
+
+
+class _NotifyProxy:
+    """Proxy for `client.notify.method(...)` — sends notifications (no response)."""
+
+    def __init__(
+        self,
+        client: JSONRPCClient,
+        name: str | None = None,
+    ) -> None:
+        self._client = client
+        self._name = name
+
+    def __getattr__(self, name: str) -> _NotifyProxy:
+        full_name = f"{self._name}.{name}" if self._name else name
+        return _NotifyProxy(self._client, full_name)
+
+    def __call__(
+        self,
+        *args: Any,
+        **kwargs: Any,
+    ) -> None:
+        if self._name is None:
+            raise TypeError(
+                "Cannot call notify directly. "
+                "Use client.notify.method_name(...)"
+            )
+        params = _resolve_params(args, kwargs)
+        self._client._send_notification(self._name, params)
+
+
+class _AsyncNotifyProxy:
+    """Proxy for `await client.notify.method(...)` — sends async notifications."""
+
+    def __init__(
+        self,
+        client: AsyncJSONRPCClient,
+        name: str | None = None,
+    ) -> None:
+        self._client = client
+        self._name = name
+
+    def __getattr__(self, name: str) -> _AsyncNotifyProxy:
+        full_name = f"{self._name}.{name}" if self._name else name
+        return _AsyncNotifyProxy(self._client, full_name)
+
+    def __call__(
+        self,
+        *args: Any,
+        **kwargs: Any,
+    ) -> Any:
+        if self._name is None:
+            raise TypeError(
+                "Cannot call notify directly. "
+                "Use client.notify.method_name(...)"
+            )
+        params = _resolve_params(args, kwargs)
+        return self._client._send_notification(self._name, params)
+
+
 # --- Sync client ---
 
 
@@ -269,6 +344,30 @@ class JSONRPCClient(BaseJSONRPCClient):
         self._fire_hooks("response", response)
         response.raise_for_error()
         return response.result
+
+    def _send_notification(
+        self,
+        method: str,
+        params: JSONParams = None,
+    ) -> None:
+        """Send a JSON-RPC notification (no response expected)."""
+        self._ensure_open()
+        request_bytes = self._build_notification_bytes(method, params)
+        self._fire_hooks("request", method, params)
+        transport = self._get_transport()
+        try:
+            transport.handle_request(request_bytes)
+        except Exception as exc:
+            self._fire_hooks("error", exc)
+            raise
+
+    @property
+    def notify(self) -> _NotifyProxy:
+        """Proxy namespace for sending notifications.
+
+        Usage: ``client.notify.method_name(params)``
+        """
+        return _NotifyProxy(self)
 
     def __getattr__(self, name: str) -> _MethodProxy:
         if name.startswith("_") or name in self._RESERVED_NAMES:
@@ -364,6 +463,30 @@ class AsyncJSONRPCClient(BaseJSONRPCClient):
         self._fire_hooks("response", response)
         response.raise_for_error()
         return response.result
+
+    async def _send_notification(
+        self,
+        method: str,
+        params: JSONParams = None,
+    ) -> None:
+        """Send an async JSON-RPC notification (no response expected)."""
+        self._ensure_open()
+        request_bytes = self._build_notification_bytes(method, params)
+        self._fire_hooks("request", method, params)
+        transport = self._get_transport()
+        try:
+            await transport.handle_async_request(request_bytes)
+        except Exception as exc:
+            self._fire_hooks("error", exc)
+            raise
+
+    @property
+    def notify(self) -> _AsyncNotifyProxy:
+        """Proxy namespace for sending async notifications.
+
+        Usage: ``await client.notify.method_name(params)``
+        """
+        return _AsyncNotifyProxy(self)
 
     def __getattr__(self, name: str) -> _AsyncMethodProxy:
         if name.startswith("_") or name in self._RESERVED_NAMES:

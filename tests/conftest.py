@@ -82,9 +82,22 @@ class JSONRPCHandler(BaseHTTPRequestHandler):
             self._send_error(-32700, "Parse error", None)
             return
 
+        # Handle batch requests (JSON array)
+        if isinstance(request, list):
+            self._handle_batch(request)
+            return
+
         method = request.get("method")
         params = request.get("params")
         request_id = request.get("id")
+
+        # Notification: no id field means no response
+        if request_id is None:
+            _dispatch(method, params)
+            self.send_response(204)
+            self.send_header("Content-Length", "0")
+            self.end_headers()
+            return
 
         result = _dispatch(method, params)
 
@@ -104,7 +117,65 @@ class JSONRPCHandler(BaseHTTPRequestHandler):
 
         self._send_json(response)
 
+    def _handle_batch(self, requests: list[Any]) -> None:
+        """Handle a batch of JSON-RPC requests."""
+        if not requests:
+            self._send_error(-32600, "Invalid Request: empty batch", None)
+            return
+
+        responses: list[dict[str, Any]] = []
+        for req in requests:
+            if not isinstance(req, dict):
+                responses.append({
+                    "jsonrpc": "2.0",
+                    "error": {"code": -32600, "message": "Invalid Request"},
+                    "id": None,
+                })
+                continue
+
+            method = req.get("method")
+            params = req.get("params")
+            request_id = req.get("id")
+
+            # Notifications in batch produce no response
+            if request_id is None:
+                _dispatch(method, params)
+                continue
+
+            result = _dispatch(method, params)
+            if isinstance(result, dict) and "__error__" in result:
+                error = result["__error__"]
+                responses.append({
+                    "jsonrpc": "2.0",
+                    "error": {"code": error["code"], "message": error["message"]},
+                    "id": request_id,
+                })
+            else:
+                responses.append({
+                    "jsonrpc": "2.0",
+                    "result": result,
+                    "id": request_id,
+                })
+
+        # If all were notifications, return 204 No Content
+        if not responses:
+            self.send_response(204)
+            self.send_header("Content-Length", "0")
+            self.end_headers()
+            return
+
+        self._send_json_raw(responses)
+
     def _send_json(self, data: dict[str, Any]) -> None:
+        body = json.dumps(data).encode()
+        self.send_response(200)
+        self.send_header("Content-Type", "application/json")
+        self.send_header("Content-Length", str(len(body)))
+        self.end_headers()
+        self.wfile.write(body)
+
+    def _send_json_raw(self, data: Any) -> None:
+        """Send arbitrary JSON (used for batch array responses)."""
         body = json.dumps(data).encode()
         self.send_response(200)
         self.send_header("Content-Type", "application/json")
