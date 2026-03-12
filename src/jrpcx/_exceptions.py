@@ -109,11 +109,28 @@ class InvalidResponseError(ProtocolError):
     """Response doesn't conform to JSON-RPC 2.0."""
 
 
+# Registry: error code → exception class (populated by __init_subclass__ and below)
+_ERROR_CODE_MAP: dict[int, type[ServerError]] = {}
+
+
 # --- Server errors (JSON-RPC error responses) ---
 
 
 class ServerError(JSONRPCError):
-    """Server returned a JSON-RPC error response."""
+    """Server returned a JSON-RPC error response.
+
+    Subclass with a CODE class attribute to auto-register for typed
+    error deserialization::
+
+        class InsufficientFundsError(jrpcx.ServerError):
+            CODE = -32001
+    """
+
+    def __init_subclass__(cls, **kwargs: Any) -> None:
+        super().__init_subclass__(**kwargs)
+        code = getattr(cls, "CODE", None)
+        if code is not None and isinstance(code, int):
+            _ERROR_CODE_MAP[code] = cls
 
 
 class MethodNotFoundError(ServerError):
@@ -156,14 +173,15 @@ class ApplicationError(ServerError):
     """Custom server error code (typically -32000 to -32099)."""
 
 
-# Registry: error code → exception class
-_ERROR_CODE_MAP: dict[int, type[ServerError]] = {
+# Add standard error codes to registry (these use __init_subclass__ but
+# don't have CODE class attrs, so we add them manually)
+_ERROR_CODE_MAP.update({
     ErrorCode.METHOD_NOT_FOUND: MethodNotFoundError,
     ErrorCode.INVALID_PARAMS: InvalidParamsError,
     ErrorCode.INTERNAL_ERROR: InternalError,
     ErrorCode.PARSE_ERROR: ParseError,  # type: ignore[dict-item]
     ErrorCode.INVALID_REQUEST: InvalidRequestError,  # type: ignore[dict-item]
-}
+})
 
 
 def error_class_for_code(code: int) -> type[ServerError]:

@@ -52,6 +52,8 @@ class BaseJSONRPCClient:
         ]
         | None = None,
         middleware: list[Any] | None = None,
+        json_encoder: type[json.JSONEncoder] | None = None,
+        json_decoder: type[json.JSONDecoder] | None = None,
     ) -> None:
         self._url = url
         self._transport = transport
@@ -65,6 +67,8 @@ class BaseJSONRPCClient:
         self._id_generator = id_generator or sequential()
         self._closed = False
         self._middleware_list = list(middleware) if middleware else []
+        self._json_encoder = json_encoder
+        self._json_decoder = json_decoder
         self._event_hooks: dict[str, list[Callable[..., Any]]] = {
             "request": [],
             "response": [],
@@ -106,7 +110,7 @@ class BaseJSONRPCClient:
         }
         if params is not None:
             payload["params"] = params
-        return json.dumps(payload).encode(), request_id
+        return json.dumps(payload, cls=self._json_encoder).encode(), request_id
 
     def _build_notification_bytes(
         self,
@@ -120,12 +124,12 @@ class BaseJSONRPCClient:
         }
         if params is not None:
             payload["params"] = params
-        return json.dumps(payload).encode()
+        return json.dumps(payload, cls=self._json_encoder).encode()
 
     def _parse_response(self, data: bytes) -> Response:
         """Parse JSON-RPC response bytes into a Response object."""
         try:
-            parsed = json.loads(data)
+            parsed = json.loads(data, cls=self._json_decoder)
         except (json.JSONDecodeError, ValueError) as exc:
             raise ProtocolError(
                 f"Invalid JSON in response: {exc}"
@@ -303,6 +307,8 @@ class JSONRPCClient(BaseJSONRPCClient):
         ]
         | None = None,
         middleware: list[Middleware] | None = None,
+        json_encoder: type[json.JSONEncoder] | None = None,
+        json_decoder: type[json.JSONDecoder] | None = None,
     ) -> None:
         super().__init__(
             url,
@@ -313,6 +319,8 @@ class JSONRPCClient(BaseJSONRPCClient):
             id_generator=id_generator,
             event_hooks=event_hooks,
             middleware=middleware,
+            json_encoder=json_encoder,
+            json_decoder=json_decoder,
         )
         if transport is not None:
             self._sync_transport: BaseTransport = transport
@@ -341,7 +349,9 @@ class JSONRPCClient(BaseJSONRPCClient):
 
     def _inner_send(self, request: Request) -> Response:
         """Innermost handler: serialize request, call transport, parse response."""
-        request_bytes = json.dumps(request.to_dict()).encode()
+        request_bytes = json.dumps(
+            request.to_dict(), cls=self._json_encoder
+        ).encode()
         response_bytes = self._sync_transport.handle_request(request_bytes)
         return self._parse_response(response_bytes)
 
@@ -351,6 +361,7 @@ class JSONRPCClient(BaseJSONRPCClient):
         params: JSONParams = None,
         *,
         timeout: TimeoutTypes | _UseClientDefault = USE_CLIENT_DEFAULT,
+        result_type: Callable[..., Any] | None = None,
     ) -> Any:
         """Make a JSON-RPC call and return the result."""
         self._ensure_open()
@@ -367,6 +378,8 @@ class JSONRPCClient(BaseJSONRPCClient):
             raise
         self._fire_hooks("response", response)
         response.raise_for_error()
+        if result_type is not None:
+            return result_type(response.result)
         return response.result
 
     def _send_notification(
@@ -448,6 +461,8 @@ class AsyncJSONRPCClient(BaseJSONRPCClient):
         ]
         | None = None,
         middleware: list[AsyncMiddleware] | None = None,
+        json_encoder: type[json.JSONEncoder] | None = None,
+        json_decoder: type[json.JSONDecoder] | None = None,
     ) -> None:
         super().__init__(
             url,
@@ -458,6 +473,8 @@ class AsyncJSONRPCClient(BaseJSONRPCClient):
             id_generator=id_generator,
             event_hooks=event_hooks,
             middleware=middleware,
+            json_encoder=json_encoder,
+            json_decoder=json_decoder,
         )
         if transport is not None:
             self._async_transport: AsyncBaseTransport = transport
@@ -486,7 +503,9 @@ class AsyncJSONRPCClient(BaseJSONRPCClient):
 
     async def _inner_send(self, request: Request) -> Response:
         """Innermost async handler: serialize, call transport, parse."""
-        request_bytes = json.dumps(request.to_dict()).encode()
+        request_bytes = json.dumps(
+            request.to_dict(), cls=self._json_encoder
+        ).encode()
         response_bytes = await self._async_transport.handle_async_request(
             request_bytes
         )
@@ -498,6 +517,7 @@ class AsyncJSONRPCClient(BaseJSONRPCClient):
         params: JSONParams = None,
         *,
         timeout: TimeoutTypes | _UseClientDefault = USE_CLIENT_DEFAULT,
+        result_type: Callable[..., Any] | None = None,
     ) -> Any:
         """Make an async JSON-RPC call and return the result."""
         self._ensure_open()
@@ -514,6 +534,8 @@ class AsyncJSONRPCClient(BaseJSONRPCClient):
             raise
         self._fire_hooks("response", response)
         response.raise_for_error()
+        if result_type is not None:
+            return result_type(response.result)
         return response.result
 
     async def _send_notification(
