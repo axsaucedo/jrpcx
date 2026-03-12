@@ -8,6 +8,7 @@ from typing import Any
 
 import httpx
 
+from jrpcx._batch import AsyncBatchCollector, BatchCollector
 from jrpcx._config import Timeout, TimeoutTypes
 from jrpcx._exceptions import InvalidResponseError, ProtocolError
 from jrpcx._id_generators import sequential
@@ -369,6 +370,21 @@ class JSONRPCClient(BaseJSONRPCClient):
         """
         return _NotifyProxy(self)
 
+    def batch(self) -> BatchCollector:
+        """Create a batch request collector.
+
+        Usage::
+
+            with client.batch() as batch:
+                batch.add(1, 2)
+                batch.echo("hello")
+            results = batch.results
+        """
+        self._ensure_open()
+        return BatchCollector(
+            self._sync_transport, self._id_generator
+        )
+
     def __getattr__(self, name: str) -> _MethodProxy:
         if name.startswith("_") or name in self._RESERVED_NAMES:
             raise AttributeError(
@@ -487,6 +503,21 @@ class AsyncJSONRPCClient(BaseJSONRPCClient):
         Usage: ``await client.notify.method_name(params)``
         """
         return _AsyncNotifyProxy(self)
+
+    def batch(self) -> AsyncBatchCollector:
+        """Create an async batch request collector.
+
+        Usage::
+
+            async with client.batch() as batch:
+                batch.add(1, 2)
+                batch.echo("hello")
+            results = batch.results
+        """
+        self._ensure_open()
+        return AsyncBatchCollector(
+            self._async_transport, self._id_generator
+        )
 
     def __getattr__(self, name: str) -> _AsyncMethodProxy:
         if name.startswith("_") or name in self._RESERVED_NAMES:
