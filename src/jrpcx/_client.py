@@ -12,7 +12,15 @@ from jrpcx._batch import AsyncBatchCollector, BatchCollector
 from jrpcx._config import Timeout, TimeoutTypes
 from jrpcx._exceptions import InvalidResponseError, ProtocolError
 from jrpcx._id_generators import sequential
-from jrpcx._models import Response
+from jrpcx._middleware import (
+    AsyncMiddleware,
+    AsyncMiddlewareHandler,
+    Middleware,
+    MiddlewareHandler,
+    build_async_middleware_chain,
+    build_middleware_chain,
+)
+from jrpcx._models import Request, Response
 from jrpcx._transports import AsyncBaseTransport, BaseTransport
 from jrpcx._transports._http import AsyncHTTPTransport, HTTPTransport
 from jrpcx._types import (
@@ -43,6 +51,7 @@ class BaseJSONRPCClient:
             str, list[Callable[..., Any]]
         ]
         | None = None,
+        middleware: list[Any] | None = None,
     ) -> None:
         self._url = url
         self._transport = transport
@@ -55,6 +64,7 @@ class BaseJSONRPCClient:
         self._auth = auth
         self._id_generator = id_generator or sequential()
         self._closed = False
+        self._middleware_list = list(middleware) if middleware else []
         self._event_hooks: dict[str, list[Callable[..., Any]]] = {
             "request": [],
             "response": [],
@@ -292,6 +302,7 @@ class JSONRPCClient(BaseJSONRPCClient):
             str, list[Callable[..., Any]]
         ]
         | None = None,
+        middleware: list[Middleware] | None = None,
     ) -> None:
         super().__init__(
             url,
@@ -301,6 +312,7 @@ class JSONRPCClient(BaseJSONRPCClient):
             auth=auth,
             id_generator=id_generator,
             event_hooks=event_hooks,
+            middleware=middleware,
         )
         if transport is not None:
             self._sync_transport: BaseTransport = transport
@@ -316,9 +328,22 @@ class JSONRPCClient(BaseJSONRPCClient):
                 auth=auth,
                 timeout=httpx_timeout,
             )
+        # Build middleware chain wrapping the transport call
+        self._call_handler: MiddlewareHandler | None = None
+        if self._middleware_list:
+            self._call_handler = build_middleware_chain(
+                self._middleware_list,
+                self._inner_send,
+            )
 
     def _get_transport(self) -> BaseTransport:
         return self._sync_transport
+
+    def _inner_send(self, request: Request) -> Response:
+        """Innermost handler: serialize request, call transport, parse response."""
+        request_bytes = json.dumps(request.to_dict()).encode()
+        response_bytes = self._sync_transport.handle_request(request_bytes)
+        return self._parse_response(response_bytes)
 
     def call(
         self,
@@ -329,19 +354,17 @@ class JSONRPCClient(BaseJSONRPCClient):
     ) -> Any:
         """Make a JSON-RPC call and return the result."""
         self._ensure_open()
-        request_bytes, _ = self._build_request_bytes(
-            method, params
-        )
+        request_id = self._next_id()
+        request = Request(method=method, params=params, id=request_id)
         self._fire_hooks("request", method, params)
-        transport = self._get_transport()
         try:
-            response_bytes = transport.handle_request(
-                request_bytes
-            )
+            if self._call_handler is not None:
+                response = self._call_handler(request)
+            else:
+                response = self._inner_send(request)
         except Exception as exc:
             self._fire_hooks("error", exc)
             raise
-        response = self._parse_response(response_bytes)
         self._fire_hooks("response", response)
         response.raise_for_error()
         return response.result
@@ -424,6 +447,7 @@ class AsyncJSONRPCClient(BaseJSONRPCClient):
             str, list[Callable[..., Any]]
         ]
         | None = None,
+        middleware: list[AsyncMiddleware] | None = None,
     ) -> None:
         super().__init__(
             url,
@@ -433,6 +457,7 @@ class AsyncJSONRPCClient(BaseJSONRPCClient):
             auth=auth,
             id_generator=id_generator,
             event_hooks=event_hooks,
+            middleware=middleware,
         )
         if transport is not None:
             self._async_transport: AsyncBaseTransport = transport
@@ -448,9 +473,24 @@ class AsyncJSONRPCClient(BaseJSONRPCClient):
                 auth=auth,
                 timeout=httpx_timeout,
             )
+        # Build async middleware chain
+        self._call_handler: AsyncMiddlewareHandler | None = None
+        if self._middleware_list:
+            self._call_handler = build_async_middleware_chain(
+                self._middleware_list,
+                self._inner_send,
+            )
 
     def _get_transport(self) -> AsyncBaseTransport:
         return self._async_transport
+
+    async def _inner_send(self, request: Request) -> Response:
+        """Innermost async handler: serialize, call transport, parse."""
+        request_bytes = json.dumps(request.to_dict()).encode()
+        response_bytes = await self._async_transport.handle_async_request(
+            request_bytes
+        )
+        return self._parse_response(response_bytes)
 
     async def call(
         self,
@@ -461,21 +501,17 @@ class AsyncJSONRPCClient(BaseJSONRPCClient):
     ) -> Any:
         """Make an async JSON-RPC call and return the result."""
         self._ensure_open()
-        request_bytes, _ = self._build_request_bytes(
-            method, params
-        )
+        request_id = self._next_id()
+        request = Request(method=method, params=params, id=request_id)
         self._fire_hooks("request", method, params)
-        transport = self._get_transport()
         try:
-            response_bytes = (
-                await transport.handle_async_request(
-                    request_bytes
-                )
-            )
+            if self._call_handler is not None:
+                response = await self._call_handler(request)
+            else:
+                response = await self._inner_send(request)
         except Exception as exc:
             self._fire_hooks("error", exc)
             raise
-        response = self._parse_response(response_bytes)
         self._fire_hooks("response", response)
         response.raise_for_error()
         return response.result
