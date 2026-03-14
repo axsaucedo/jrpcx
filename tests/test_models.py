@@ -60,8 +60,8 @@ class TestErrorData:
 
 class TestRequest:
     def test_basic_request(self) -> None:
-        req = Request(method="eth_blockNumber", id=1)
-        assert req.method == "eth_blockNumber"
+        req = Request(method="tools/list", id=1)
+        assert req.method == "tools/list"
         assert req.params is None
         assert req.id == 1
         assert not req.is_notification
@@ -113,10 +113,10 @@ class TestRequest:
 
 class TestResponse:
     def test_success_response(self) -> None:
-        resp = Response(id=1, result="0x10d4f")
+        resp = Response(id=1, result={"tools": [{"name": "search"}]})
         assert resp.is_success
         assert not resp.is_error
-        assert resp.result == "0x10d4f"
+        assert resp.result == {"tools": [{"name": "search"}]}
 
     def test_error_response(self) -> None:
         err = ErrorData(code=-32601, message="Method not found")

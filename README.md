@@ -1,6 +1,6 @@
 # jrpcx
 
-A modern Python JSON-RPC 2.0 client inspired by [httpx](https://www.python-httpx.org/).
+A modern Python JSON-RPC 2.0 client inspired by [httpx](https://www.python-httpx.org/). First-class support for agentic protocols like [MCP](https://modelcontextprotocol.io/) and [A2A](https://google.github.io/A2A/).
 
 ## Installation
 
@@ -14,9 +14,12 @@ pip install jrpcx
 import jrpcx
 
 # Proxy-first API — call methods directly as attributes
-with jrpcx.Client("https://rpc.example.com") as client:
-    result = client.eth_blockNumber()
-    balance = client.eth_getBalance("0x...", "latest")
+with jrpcx.Client("http://localhost:8080") as client:
+    # MCP: list available tools
+    tools = client.call("tools/list")
+
+    # MCP: call a tool
+    result = client.call("tools/call", name="search", arguments={"query": "hello"})
 ```
 
 ## Features
@@ -44,12 +47,12 @@ with jrpcx.Client("https://rpc.example.com") as client:
 ```python
 import jrpcx
 
-with jrpcx.Client("https://rpc.example.com") as client:
+with jrpcx.Client("http://localhost:8080") as client:
     # Positional params → JSON array
     result = client.add(1, 2)
 
     # Keyword params → JSON object
-    greeting = client.greet(name="World")
+    result = client.call("tools/call", name="search", arguments={"query": "hello"})
 
     # Nested namespaces
     methods = client.system.listMethods()
@@ -67,9 +70,9 @@ result = client.call("close", {"reason": "done"})
 ```python
 import jrpcx
 
-async with jrpcx.AsyncClient("https://rpc.example.com") as client:
-    result = await client.eth_blockNumber()
-    balance = await client.eth_getBalance("0x...", "latest")
+async with jrpcx.AsyncClient("http://localhost:8080") as client:
+    tools = await client.call("tools/list")
+    result = await client.call("tools/call", name="search", arguments={"query": "hello"})
 ```
 
 ### Without Context Manager
@@ -77,7 +80,7 @@ async with jrpcx.AsyncClient("https://rpc.example.com") as client:
 ```python
 import jrpcx
 
-client = jrpcx.Client("https://rpc.example.com")
+client = jrpcx.Client("http://localhost:8080")
 result = client.add(1, 2)
 client.close()
 ```
@@ -88,7 +91,7 @@ client.close()
 import jrpcx
 
 client = jrpcx.Client(
-    "https://rpc.example.com",
+    "http://localhost:8080",
     headers={"Authorization": "Bearer token"},
     auth=("user", "pass"),
     timeout=30.0,
@@ -100,7 +103,7 @@ client = jrpcx.Client(
 ```python
 import jrpcx
 
-with jrpcx.Client("https://rpc.example.com") as client:
+with jrpcx.Client("http://localhost:8080") as client:
     try:
         client.nonexistent_method()
     except jrpcx.MethodNotFoundError as e:
@@ -125,7 +128,7 @@ def log_response(response):
     print(f"← {response.result}")
 
 client = jrpcx.Client(
-    "https://rpc.example.com",
+    "http://localhost:8080",
     event_hooks={
         "request": [log_request],
         "response": [log_response],
@@ -140,7 +143,7 @@ Send fire-and-forget calls (no response, no `id` in the JSON-RPC request):
 ```python
 import jrpcx
 
-with jrpcx.Client("https://rpc.example.com") as client:
+with jrpcx.Client("http://localhost:8080") as client:
     client.notify.log_event("user_login", user_id=42)
 
     # Nested namespaces work
@@ -150,7 +153,7 @@ with jrpcx.Client("https://rpc.example.com") as client:
 Async:
 
 ```python
-async with jrpcx.AsyncClient("https://rpc.example.com") as client:
+async with jrpcx.AsyncClient("http://localhost:8080") as client:
     await client.notify.log_event("user_login", user_id=42)
 ```
 
@@ -161,7 +164,7 @@ Group multiple calls into a single round-trip:
 ```python
 import jrpcx
 
-with jrpcx.Client("https://rpc.example.com") as client:
+with jrpcx.Client("http://localhost:8080") as client:
     with client.batch() as batch:
         batch.add(1, 2)
         batch.subtract(10, 5)
@@ -177,7 +180,7 @@ with jrpcx.Client("https://rpc.example.com") as client:
 Async:
 
 ```python
-async with jrpcx.AsyncClient("https://rpc.example.com") as client:
+async with jrpcx.AsyncClient("http://localhost:8080") as client:
     async with client.batch() as batch:
         batch.add(1, 2)
         batch.subtract(10, 5)
@@ -201,7 +204,7 @@ def timing_middleware(request, call_next):
     return response
 
 client = jrpcx.Client(
-    "https://rpc.example.com",
+    "http://localhost:8080",
     middleware=[timing_middleware],
 )
 ```
@@ -210,7 +213,7 @@ Chain multiple middleware — they execute in the order provided:
 
 ```python
 client = jrpcx.Client(
-    "https://rpc.example.com",
+    "http://localhost:8080",
     middleware=[auth_middleware, timing_middleware, cache_middleware],
 )
 ```
@@ -223,7 +226,7 @@ Built-in retry middleware with configurable backoff:
 from jrpcx.middleware import retry, ExponentialBackoff
 
 client = jrpcx.Client(
-    "https://rpc.example.com",
+    "http://localhost:8080",
     middleware=[
         retry(
             max_retries=3,
@@ -240,7 +243,7 @@ For async clients use `async_retry`:
 from jrpcx.middleware import async_retry, ExponentialBackoff
 
 client = jrpcx.AsyncClient(
-    "https://rpc.example.com",
+    "http://localhost:8080",
     middleware=[
         async_retry(max_retries=3, backoff=ExponentialBackoff()),
     ],
@@ -258,7 +261,7 @@ import jrpcx
 logger = logging.getLogger("jrpcx")
 
 client = jrpcx.Client(
-    "https://rpc.example.com",
+    "http://localhost:8080",
     event_hooks={
         "request": [jrpcx.log_request(logger)],
         "response": [jrpcx.log_response(logger)],
@@ -296,7 +299,7 @@ def decimal_encoder(obj):
     raise TypeError(f"Object of type {type(obj)} is not JSON serializable")
 
 client = jrpcx.Client(
-    "https://rpc.example.com",
+    "http://localhost:8080",
     json_encoder=decimal_encoder,
 )
 client.transfer(amount=decimal.Decimal("1.005"))
@@ -311,13 +314,13 @@ from dataclasses import dataclass
 import jrpcx
 
 @dataclass
-class Block:
-    number: int
-    hash: str
+class ToolResult:
+    content: str
+    is_error: bool = False
 
-with jrpcx.Client("https://rpc.example.com") as client:
-    block = client.call("eth_getBlockByNumber", ["latest", False], result_type=Block)
-    print(block.number)  # int, not dict
+with jrpcx.Client("http://localhost:8080") as client:
+    result = client.call("tools/call", {"name": "search", "arguments": {"query": "hello"}}, result_type=ToolResult)
+    print(result.content)  # str, not dict
 ```
 
 ### Testing with MockTransport

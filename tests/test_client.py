@@ -46,10 +46,10 @@ class TestBaseClient:
 
     def test_build_request_bytes(self) -> None:
         client = BaseJSONRPCClient("http://localhost")
-        data, req_id = client._build_request_bytes("eth_blockNumber")
+        data, req_id = client._build_request_bytes("tools/list")
         parsed = json.loads(data)
         assert parsed["jsonrpc"] == "2.0"
-        assert parsed["method"] == "eth_blockNumber"
+        assert parsed["method"] == "tools/list"
         assert parsed["id"] == req_id
         assert "params" not in parsed
 
@@ -160,7 +160,7 @@ class TestJSONRPCClient:
     def test_proxy_no_params(self) -> None:
         transport = MockTransport(echo_handler)
         client = JSONRPCClient("http://localhost", transport=transport)
-        result = client.eth_blockNumber()
+        result = client.ping()
         assert result is None
 
     def test_proxy_nested(self) -> None:
