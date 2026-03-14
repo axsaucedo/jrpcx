@@ -20,14 +20,32 @@ The Python ecosystem currently lacks a JSON-RPC 2.0 client that combines httpx's
 jrpcx fills this gap: a **client-only** library that feels natural to any Python developer who has used httpx, with the protocol correctness of jrpc2, the feature richness of pjrpc, and the simplicity of jsonrpcclient — all in a single, well-typed package targeting Python 3.12+.
 
 ```python
-# The 80% use case — one line
-result = jrpcx.call("https://rpc.example.com", "eth_blockNumber")
+# The 80% use case — proxy-first, one line
+client = jrpcx.Client("https://rpc.example.com")
+result = client.eth_blockNumber()
 
-# The 20% power-user case — still intuitive
+# With parameters — positional or keyword
+balance = client.eth_getBalance("0x...", "latest")
+
+# Notifications
+client.notify.log_event(level="info", msg="started")
+
+# Async
 async with jrpcx.AsyncClient("https://rpc.example.com", timeout=10.0) as client:
-    block = await client.call("eth_blockNumber")
-    balance = await client.call("eth_getBalance", ["0x...", "latest"])
+    block = await client.eth_blockNumber()
+    balance = await client.eth_getBalance("0x...", "latest")
+
+# Explicit call for dynamic/reserved method names
+result = client.call("close", params)
 ```
+
+> **API Design Update (from review discussions):**
+> - **Proxy-first** is the default interface: `client.method()` via `__getattr__`
+> - **`.call()` fallback** for reserved names and dynamic method strings
+> - **Notifications** via `client.notify.method()` namespace
+> - **Type returns**: Raw `Any` for Phase 0/1; `result_type=` as Phase 2 stretch
+> - **Lifecycle**: Both context manager and explicit create/close patterns supported
+> - **Batch**: Deferred to Phase 2
 
 ---
 
@@ -289,13 +307,22 @@ class AsyncHTTPTransport(AsyncBaseTransport):
 - Validates HTTP status codes — non-2xx raises `TransportError`
 - Connection pooling enabled by default via httpx's pool management
 
-### 3.8 Sync Client (`_client.py`)
+### 3.8 Sync Client — Proxy-First (`_client.py`)
 
-The primary user-facing API. Inspired by httpx's `Client` with the ergonomic simplicity of ybbus/jsonrpc.
+The primary user-facing API. **Proxy-first**: `client.method()` is the default interface via `__getattr__`. `.call()` is the fallback for dynamic/reserved names. `.notify` namespace for notifications.
 
 ```python
 class JSONRPCClient(BaseJSONRPCClient):
-    """Synchronous JSON-RPC 2.0 client."""
+    """Synchronous JSON-RPC 2.0 client. Proxy-first API."""
+
+    def __getattr__(self, name: str) -> "_MethodProxy":
+        """Proxy dispatch: client.method() → call("method")."""
+        ...
+
+    @property
+    def notify(self) -> "_NotifyProxy":
+        """Notification namespace: client.notify.method()."""
+        ...
 
     def call(
         self,
@@ -304,23 +331,7 @@ class JSONRPCClient(BaseJSONRPCClient):
         *,
         timeout: TimeoutTypes | UseClientDefault = USE_CLIENT_DEFAULT,
     ) -> Response:
-        """Make a JSON-RPC call and return the response.
-
-        Args:
-            method: The JSON-RPC method name to invoke.
-            params: Positional (list) or named (dict) parameters. Omitted from
-                    the request when None.
-            timeout: Per-request timeout override. Uses client default when not
-                     specified.
-
-        Returns:
-            Response object with .result, .error, .is_success, .raise_for_error()
-
-        Raises:
-            TransportError: Network or HTTP-level failures.
-            JSONRPCError: When the server returns a JSON-RPC error response
-                          and auto_raise is enabled.
-        """
+        """Explicit call for dynamic or reserved method names."""
         ...
 
     def close(self) -> None: ...
@@ -330,18 +341,35 @@ class JSONRPCClient(BaseJSONRPCClient):
 
 **Usage:**
 ```python
+# Proxy-first (default)
 with jrpcx.Client("https://rpc.example.com") as client:
-    response = client.call("eth_blockNumber")
-    print(response.result)  # "0x10d4f"
+    result = client.eth_blockNumber()                # __getattr__ dispatch
+    balance = client.eth_getBalance("0x...", "latest")
+    client.notify.log_event(level="info")            # notification
+    result = client.call("close", params)            # reserved name fallback
+
+# Non-context-manager
+client = jrpcx.Client("https://rpc.example.com")
+client.eth_blockNumber()
+client.close()
 ```
 
-### 3.9 Async Client (`_client.py`)
+### 3.9 Async Client — Proxy-First (`_client.py`)
 
-Mirrors the sync client with `async`/`await`. Shares all business logic via `BaseJSONRPCClient`.
+Mirrors the sync client with `async`/`await`. Shares all business logic via `BaseJSONRPCClient`. Same proxy-first API.
 
 ```python
 class AsyncJSONRPCClient(BaseJSONRPCClient):
-    """Asynchronous JSON-RPC 2.0 client."""
+    """Asynchronous JSON-RPC 2.0 client. Proxy-first API."""
+
+    def __getattr__(self, name: str) -> "_AsyncMethodProxy":
+        """Proxy dispatch: await client.method()."""
+        ...
+
+    @property
+    def notify(self) -> "_AsyncNotifyProxy":
+        """Notification namespace: await client.notify.method()."""
+        ...
 
     async def call(
         self,
@@ -359,8 +387,8 @@ class AsyncJSONRPCClient(BaseJSONRPCClient):
 **Usage:**
 ```python
 async with jrpcx.AsyncClient("https://rpc.example.com") as client:
-    response = await client.call("eth_blockNumber")
-    print(response.result)
+    result = await client.eth_blockNumber()
+    client.notify.log_event(level="info")
 ```
 
 ### 3.10 Basic Error Handling (`_errors.py`)
@@ -462,27 +490,29 @@ async with jrpcx.AsyncClient("https://rpc.example.com") as client:
 
 > **Goal:** Building on the foundation to deliver a feature-complete core library suitable for real-world use.
 >
-> **Success Criteria:** Batch, notifications, proxy, hooks all working with full test coverage; mypy --strict passes; comprehensive pytest suite with >90% coverage.
+> **Success Criteria:** Proxy, hooks, client configuration all working with full test coverage; mypy --strict passes; comprehensive pytest suite with >90% coverage.
+>
+> **Note:** Batch requests and notifications moved to Phase 2 per design review.
 
-### 4.1 Notification Support
+### 4.1 Notification Support (Deferred to Phase 2)
 
 Fire-and-forget requests with no response expected. Per the JSON-RPC 2.0 spec, notifications omit the `id` field and the server MUST NOT reply.
 
 ```python
-# Dedicated method — clear intent
-client.notify("log_event", {"level": "info", "message": "User logged in"})
+# Proxy-first notification via .notify namespace
+client.notify.log_event(level="info", message="User logged in")
 
 # Async
-await client.notify("log_event", {"level": "info", "message": "User logged in"})
+await client.notify.log_event(level="info", message="User logged in")
 ```
 
 **Implementation:**
-- `notify()` builds a `Request` with `id=None`
+- `client.notify` returns a `_NotifyProxy` that dispatches via `__getattr__`
+- Builds a `Request` with `id=None`
 - Transport sends the request but does not wait for or parse a response
 - Returns `None` — there is no response to return
-- In batch mode, notifications are included in the batch array but excluded from the response correlation
 
-### 4.2 Batch Requests
+### 4.2 Batch Requests (Deferred to Phase 2)
 
 Send multiple JSON-RPC requests in a single HTTP call. Two API styles inspired by pjrpc's batch design.
 
@@ -565,29 +595,31 @@ class ErrorCode:
     SERVER_ERROR_MAX = -32000
 ```
 
-### 4.4 Proxy Pattern
+### 4.4 Proxy Pattern (Now the Default)
 
-Dot-notation method calls via `__getattr__`-based dynamic dispatch. Inspired by pjrpc's proxy object.
+**Updated from design review:** The proxy pattern is now the **default** client interface, not a separate accessor. `client.method()` dispatches via `__getattr__`. `.call()` is the explicit fallback for reserved/dynamic names.
 
 ```python
 with jrpcx.Client("https://rpc.example.com") as client:
-    # These are equivalent:
-    response = client.call("eth_blockNumber")
-    response = client.proxy.eth_blockNumber()
-
-    # With parameters:
-    response = client.call("eth_getBalance", ["0x...", "latest"])
-    response = client.proxy.eth_getBalance("0x...", "latest")
+    # Proxy-first (default):
+    result = client.eth_blockNumber()                    # __getattr__ dispatch
+    result = client.eth_getBalance("0x...", "latest")    # positional params
 
     # Nested namespaces:
-    response = client.proxy.system.listMethods()
-    # Sends method: "system.listMethods"
+    result = client.system.listMethods()                 # "system.listMethods"
+
+    # Notifications via .notify namespace:
+    client.notify.log_event(level="info")                # notification
+
+    # Explicit call fallback for reserved names:
+    result = client.call("close", params)                # can't use client.close()
 ```
 
 **Implementation:**
-- `client.proxy` returns a `Proxy` object
-- `Proxy.__getattr__` returns a `ProxyMethod` callable
-- `ProxyMethod.__call__` delegates to `client.call()`
+- Client itself is the proxy via `__getattr__` — no separate `.proxy` accessor needed
+- `__getattr__` returns a `_MethodProxy` callable
+- `_MethodProxy.__call__` delegates to `client.call()`
+- Reserved names (`call`, `notify`, `close`) protected from `__getattr__`
 - Nested attribute access builds dotted method names (`system.listMethods`)
 - Works with both sync and async clients
 
@@ -734,9 +766,46 @@ tests/
 
 ## 5. Phase 2: Production Features (v0.2.0)
 
-> **Goal:** Making jrpcx production-deployable with middleware, advanced retry, authentication, and observability.
+> **Goal:** Making jrpcx production-deployable with batch requests, middleware, advanced retry, authentication, and observability.
 >
-> **Success Criteria:** Production deployable with retry, middleware, auth, logging; all features tested; docs cover production deployment patterns.
+> **Success Criteria:** Production deployable with batch, retry, middleware, auth, logging; all features tested; docs cover production deployment patterns.
+
+### 5.0 Batch Requests & Notifications (Moved from Phase 1)
+
+#### Notification Support
+
+```python
+client.notify.log_event(level="info", message="User logged in")
+await client.notify.log_event(level="info", message="User logged in")
+```
+
+#### Batch Requests
+
+Send multiple JSON-RPC requests in a single HTTP call. Two API styles inspired by pjrpc's batch design.
+
+**Context manager API (primary — recommended for most users):**
+```python
+with client.batch() as batch:
+    batch.call("eth_blockNumber")
+    batch.call("eth_getBalance", ["0x...", "latest"])
+    batch.notify.log_access()
+
+responses = batch.responses
+responses.has_errors        # True if any response is an error
+responses.successes         # List of successful responses
+responses.errors            # List of error responses
+responses.by_id(1)          # Lookup response by request ID
+responses.results()         # List of result values (raises on first error)
+```
+
+**Direct API (advanced — for programmatic batch construction):**
+```python
+requests = [
+    jrpcx.Request(method="eth_blockNumber", id=1),
+    jrpcx.Request(method="eth_getBalance", params=["0x...", "latest"], id=2),
+]
+responses = client.send_batch(requests)
+```
 
 ### 5.1 Middleware Support
 
